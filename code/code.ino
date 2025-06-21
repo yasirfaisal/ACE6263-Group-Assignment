@@ -1,102 +1,107 @@
-#define BLYNK_PRINT Serial
+#define BLYNK_TEMPLATE_ID "TMPL65PgjKywK"
+#define BLYNK_TEMPLATE_NAME "Catfeeder"
+
 #include <WiFi.h>
 #include <BlynkSimpleEsp32.h>
 #include <ESP32Servo.h>
-#include <HX711.h>
+#include "HX711.h"
 
-// Replace with your Blynk auth token and Wi-Fi credentials
-char auth[]   = "YourAuthToken";
-char ssid[]   = "YourSSID";
-char pass[]   = "YourPassword";
+// Blynk credentials
+char auth[] = "YourAuthTokenHere";
+char ssid[] = "YourWiFiSSID";
+char pass[] = "YourWiFiPassword";
 
-// Pin assignments
-const int SERVO_GATE_PIN  = 21;  // Gate servo
-const int SERVO_DISP_PIN  = 17;  // Dispense servo
-const int HX711_DT        = 19;  // HX711 data
-const int HX711_SCK       = 18;  // HX711 clock
-const int TRIG_PIN        = 23;  // HC-SR04 trigger
-const int ECHO_PIN        = 22;  // HC-SR04 echo (via divider)
+// Pins
+const int GATE_SERVO_PIN = 13;
+const int DISPENSER_SERVO_PIN = 12;
+const int HX711_DT = 19;
+const int HX711_SCK = 18;
+const int TRIG_PIN = 25;
+const int ECHO_PIN = 26;
 
-// Blynk virtual pins
-#define VPIN_WEIGHT    V1
-#define VPIN_PROXIMITY V2
-#define VPIN_FEED_BTN  V3
+// Blynk virtual button pin
+#define VPIN_FEED_BUTTON V0
 
 Servo gateServo;
-Servo dispServo;
+Servo dispenserServo;
 HX711 scale;
-BlynkTimer timer;
+
+unsigned long lastDispenseTime = 0;
+const unsigned long cooldown = 10000; // 10 sec cooldown
 
 void setup() {
   Serial.begin(115200);
+  delay(1000);
+
+  // Blynk and Wi-Fi
   Blynk.begin(auth, ssid, pass);
 
-  // Attach servos
-  gateServo.attach(SERVO_GATE_PIN, 500, 2400);  // pulse limits in µs
-  dispServo.attach(SERVO_DISP_PIN, 500, 2400);
+  // Servo setup
+  gateServo.attach(GATE_SERVO_PIN);
+  dispenserServo.attach(DISPENSER_SERVO_PIN);
   gateServo.write(0);
-  dispServo.write(0);
+  dispenserServo.write(0);
 
-  // Initialize HX711
+  // HX711
   scale.begin(HX711_DT, HX711_SCK);
-  scale.set_scale(2280.f);  // calibration factor (adjust in code)
+  delay(2000);
+  scale.set_scale();
   scale.tare();
 
-  // Initialize HC-SR04 pins
+  // Ultrasonic pins
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
 
-  // Send sensor data every 30 seconds
-  timer.setInterval(30000L, sendSensorData);
+  Serial.println("SmartCatFeeder Ready (Blynk + Ultrasonic)");
 }
 
-// Main loop
-void loop() {
-  Blynk.run();
-  timer.run();
-}
-
-// Blynk button press handler to trigger feeding
-BLYNK_WRITE(VPIN_FEED_BTN) {
-  if (param.asInt()) {
-    dispenseMeal();
-    // Reset the button in app
-    Blynk.virtualWrite(VPIN_FEED_BTN, 0);
+// Blynk button: manual feed trigger
+BLYNK_WRITE(VPIN_FEED_BUTTON) {
+  int buttonState = param.asInt();
+  if (buttonState == 1) {
+    dispenseFood();
   }
 }
 
-// Function to perform a single feed cycle
-void dispenseMeal() {
-  // 1. Open gate
-  gateServo.write(90);
-  delay(500);
+void loop() {
+  Blynk.run();
 
-  // 2. Rotate dispense servo to push food
-  dispServo.write(60);
-  delay(800);
-  dispServo.write(0);
-  delay(500);
+  float distance = getDistance();
+  Serial.print("Distance: ");
+  Serial.print(distance);
+  Serial.println(" cm");
 
-  // 3. Close gate
-  gateServo.write(0);
+  // Auto-detect via ultrasonic
+  if (distance > 5 && distance < 30 && millis() - lastDispenseTime > cooldown) {
+    Serial.println("Cat detected via ultrasonic. Dispensing...");
+    dispenseFood();
+  }
 
-  // 4. Update readings on Blynk
-  sendSensorData();
+  delay(300);
 }
 
-// Read sensors and send to Blynk
-void sendSensorData() {
-  // Read weight (grams)
-  float weight = scale.get_units(10);
-  Blynk.virtualWrite(VPIN_WEIGHT, weight);
-
-  // Read distance (cm)
+float getDistance() {
   digitalWrite(TRIG_PIN, LOW);
   delayMicroseconds(2);
   digitalWrite(TRIG_PIN, HIGH);
   delayMicroseconds(10);
   digitalWrite(TRIG_PIN, LOW);
-  long duration = pulseIn(ECHO_PIN, HIGH);
-  float distance = duration * 0.034 / 2;
-  Blynk.virtualWrite(VPIN_PROXIMITY, distance);
+
+  long duration = pulseIn(ECHO_PIN, HIGH, 30000);
+  return duration * 0.034 / 2.0;
+}
+
+void dispenseFood() {
+  lastDispenseTime = millis();
+
+  gateServo.write(90);
+  delay(500);
+
+  dispenserServo.write(60);
+  delay(700);
+  dispenserServo.write(0);
+  delay(500);
+
+  gateServo.write(0);
+  Serial.println("Food dispensed.");
 }
